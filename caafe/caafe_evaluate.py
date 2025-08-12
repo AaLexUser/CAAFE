@@ -1,10 +1,12 @@
 import copy
+
+import numpy as np
 import pandas as pd
 import tabpfn
-import numpy as np
-from .data import get_X_y
-from .preprocessing import make_datasets_numeric, make_dataset_numeric
 from sklearn.base import BaseEstimator
+
+from .data import get_X_y
+from .preprocessing import make_dataset_numeric, make_datasets_numeric
 
 
 def evaluate_dataset(

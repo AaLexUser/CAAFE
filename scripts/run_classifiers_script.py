@@ -3,15 +3,13 @@ Runs downstream classifiers on the dataset and combines it with different featur
 """
 
 import argparse
-import torch
-from tabpfn.scripts import tabular_metrics
-from cafe_feature_engineering import data, cafe, evaluate, settings
-import os
-import openai
-from tabpfn.scripts.tabular_baselines import clf_dict
-from tabpfn import TabPFNClassifier
 from functools import partial
 
+import torch
+from cafe_feature_engineering import data, evaluate
+from tabpfn import TabPFNClassifier
+from tabpfn.scripts import tabular_metrics
+from tabpfn.scripts.tabular_baselines import clf_dict
 
 if __name__ == "__main__":
     # Parse args

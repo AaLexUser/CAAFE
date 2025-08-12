@@ -1,20 +1,36 @@
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 from sklearn.utils.multiclass import unique_labels
-from .run_llm_code import run_llm_code
+
+from .caafe import generate_features
+from .entity.task import ClassificationTask
+from .metrics import auc_metric
 from .preprocessing import (
+    make_dataset_numeric,
     make_datasets_numeric,
     split_target_column,
-    make_dataset_numeric,
 )
-from .data import get_X_y
-from .caafe import generate_features
-from .metrics import auc_metric, accuracy_metric
-import pandas as pd
-import numpy as np
-from typing import Optional
-import pandas as pd
+from .run_llm_code import run_llm_code
 
+
+@dataclass(frozen=True)
+class Dataset:
+    """Dataset metadata used by feature generation.
+
+    Maintains positional order compatibility:
+    0: name, 1: X, 2: y, 3: categorical_features, 4: columns, 5: modifications, 6: description
+    """
+
+    name: str
+    X: Any
+    y: Any
+    categorical_features: List[int]
+    columns: List[str]
+    modifications: Dict[str, Any]
+    description: str
 
 
 class CAAFEClassifier(BaseEstimator, ClassifierMixin):
@@ -29,6 +45,7 @@ class CAAFEClassifier(BaseEstimator, ClassifierMixin):
     n_splits (int, optional): The number of cross-validation splits to use during feature generation. Defaults to 10.
     n_repeats (int, optional): The number of times to repeat the cross-validation during feature generation. Defaults to 2.
     """
+
     def __init__(
         self,
         base_classifier: Optional[object] = None,
@@ -37,12 +54,15 @@ class CAAFEClassifier(BaseEstimator, ClassifierMixin):
         llm_model: str = "gpt-3.5-turbo",
         n_splits: int = 10,
         n_repeats: int = 2,
+        display_method: str = "markdown",
+        **kwargs,
     ) -> None:
         self.base_classifier = base_classifier
         if self.base_classifier is None:
-            from tabpfn.scripts.transformer_prediction_interface import TabPFNClassifier
-            import torch
             from functools import partial
+
+            import torch
+            from tabpfn.scripts.transformer_prediction_interface import TabPFNClassifier
 
             self.base_classifier = TabPFNClassifier(
                 N_ensemble_configurations=16,
@@ -56,6 +76,8 @@ class CAAFEClassifier(BaseEstimator, ClassifierMixin):
         self.optimization_metric = optimization_metric
         self.n_splits = n_splits
         self.n_repeats = n_repeats
+        self.display_method = display_method
+        self.kwargs = kwargs
 
     def fit_pandas(self, df, dataset_description, target_column_name, **kwargs):
         """
@@ -77,70 +99,38 @@ class CAAFEClassifier(BaseEstimator, ClassifierMixin):
             X, y, dataset_description, feature_columns, target_column_name, **kwargs
         )
 
-    def fit(
-        self, X, y, dataset_description, feature_names, target_name, disable_caafe=False
-    ):
-        """
-        Fit the model to the training data.
+    def fit(self, description, dataframe, target_column):
+        task = ClassificationTask(
+            description=description,
+            dataframe=dataframe,
+            target_column=target_column,
+        )
 
-        Parameters:
-        -----------
-        X : np.ndarray
-            The training data features.
-        y : np.ndarray
-            The training data target values.
-        dataset_description : str
-            A description of the dataset.
-        feature_names : List[str]
-            The names of the features in the dataset.
-        target_name : str
-            The name of the target variable in the dataset.
-        disable_caafe : bool, optional
-            Whether to disable the CAAFE algorithm, by default False.
-        """
-        self.dataset_description = dataset_description
-        self.feature_names = list(feature_names)
-        self.target_name = target_name
-
-        self.X_ = X
-        self.y_ = y
-
-        if X.shape[0] > 3000 and self.base_classifier.__class__.__name__ == "TabPFNClassifier":
+        if (
+            task.dataframe.shape[0] > 3000
+            and self.base_classifier.__class__.__name__ == "TabPFNClassifier"
+        ):
             print(
                 "WARNING: TabPFN may take a long time to run on large datasets. Consider using alternatives (e.g. RandomForestClassifier)"
             )
-        elif X.shape[0] > 10000 and self.base_classifier.__class__.__name__ == "TabPFNClassifier":
+        elif (
+            task.dataframe.shape[0] > 10000
+            and self.base_classifier.__class__.__name__ == "TabPFNClassifier"
+        ):
             print("WARNING: CAAFE may take a long time to run on large datasets.")
 
-        ds = [
-            "dataset",
-            X,
-            y,
-            [],
-            self.feature_names + [target_name],
-            {},
-            dataset_description,
-        ]
-        # Add X and y as one dataframe
-        df_train = pd.DataFrame(
-            X,
-            columns=self.feature_names,
+        self.code, prompt, messages = generate_features(
+            ds,
+            df_train,
+            model=self.llm_model,
+            iterative=self.iterations,
+            metric_used=auc_metric,
+            iterative_method=self.base_classifier,
+            display_method=self.display_method,
+            n_splits=self.n_splits,
+            n_repeats=self.n_repeats,
+            **self.kwargs,  # Pass through any additional provider-specific kwarg
         )
-        df_train[target_name] = y
-        if disable_caafe:
-            self.code = ""
-        else:
-            self.code, prompt, messages = generate_features(
-                ds,
-                df_train,
-                model=self.llm_model,
-                iterative=self.iterations,
-                metric_used=auc_metric,
-                iterative_method=self.base_classifier,
-                display_method="markdown",
-                n_splits=self.n_splits,
-                n_repeats=self.n_repeats,
-            )
 
         df_train = run_llm_code(
             self.code,
@@ -177,7 +167,7 @@ class CAAFEClassifier(BaseEstimator, ClassifierMixin):
         """
         # check_is_fitted(self)
 
-        if type(X) != pd.DataFrame:
+        if X is not pd.DataFrame:
             X = pd.DataFrame(X, columns=self.X_.columns)
         X, _ = split_target_column(X, self.target_name)
 

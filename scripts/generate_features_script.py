@@ -3,18 +3,18 @@ Runs the CAAFE algorithm on a dataset and saves the generated code and prompt to
 """
 
 import argparse
+import os
 from functools import partial
 
-from tabpfn.scripts import tabular_metrics
-from tabpfn import TabPFNClassifier
-import tabpfn
-from tabpfn.scripts.tabular_baselines import clf_dict
-import os
 import openai
+import tabpfn
 import torch
+from tabpfn import TabPFNClassifier
+from tabpfn.scripts import tabular_metrics
+from tabpfn.scripts.tabular_baselines import clf_dict
 
-from caafe.data import get_data_split, load_all_data
 from caafe.caafe import generate_features
+from caafe.data import get_data_split, load_all_data
 
 
 def generate_and_save_feats(i, seed=0, iterative_method=None, iterations=10):

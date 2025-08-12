@@ -1,11 +1,11 @@
 import copy
-import numpy as np
+from typing import Optional
 
-import openai
+import numpy as np
+from openai import OpenAI
 from sklearn.model_selection import RepeatedKFold
-from .caafe_evaluate import (
-    evaluate_dataset,
-)
+
+from .caafe_evaluate import evaluate_dataset
 from .run_llm_code import run_llm_code
 
 
@@ -28,7 +28,7 @@ Columns in `df` (true feature dtypes listed here, categoricals encoded as int):
 This code was written by an expert datascientist working to improve predictions. It is a snippet of code that adds new columns to the dataset.
 Number of samples (rows) in training dataset: {int(len(df))}
     
-This code generates additional columns that are useful for a downstream classification algorithm (such as XGBoost) predicting \"{ds[4][-1]}\".
+This code generates additional columns that are useful for a downstream classification algorithm (such as XGBoost) predicting \"{ds.columns[-1]}\".
 Additional columns add new semantic information, that is they use real world knowledge on the dataset. They can e.g. be feature combinations, transformations, aggregations where the new column is a function of the existing columns.
 The scale of columns and offset does not matter. Make sure all used columns exist. Follow the above description of columns closely and consider the datatypes and meanings of classes.
 This code also drops columns, if these may be redundant and hurt the predictive performance of the downstream classifier (Feature selection). Dropping columns may help as the chance of overfitting is lower, especially if the dataset is small.
@@ -38,7 +38,7 @@ Added columns can be used in other codeblocks, dropped columns are not available
 Code formatting for each added column:
 ```python
 # (Feature name and description)
-# Usefulness: (Description why this adds useful real world knowledge to classify \"{ds[4][-1]}\" according to dataset description and attributes.)
+# Usefulness: (Description why this adds useful real world knowledge to classify \"{ds.columns[-1]}\" according to dataset description and attributes.)
 # Input samples: (Three samples of the columns used in the following code, e.g. '{df.columns[0]}': {list(df.iloc[:3, 0].values)}, '{df.columns[1]}': {list(df.iloc[:3, 1].values)}, ...)
 (Some pandas code using {df.columns[0]}', '{df.columns[1]}', ... to add a new column for each row in df)
 ```end
@@ -59,7 +59,7 @@ Codeblock:
 
 
 def build_prompt_from_df(ds, df, iterative=1):
-    data_description_unparsed = ds[-1]
+    data_description_unparsed = ds.description
     feature_importance = {}  # xgb_eval(_obj)
 
     samples = ""
@@ -96,31 +96,32 @@ def build_prompt_from_df(ds, df, iterative=1):
 def generate_features(
     ds,
     df,
-    model="gpt-3.5-turbo",
-    just_print_prompt=False,
-    iterative=1,
-    metric_used=None,
-    iterative_method="logistic",
-    display_method="markdown",
-    n_splits=10,
-    n_repeats=2,
+    model: str = "gpt-3.5-turbo",
+    just_print_prompt: bool = False,
+    iterative: int = 1,
+    metric_used: Optional[str] = None,
+    iterative_method: str = "logistic",
+    display_method: str = "markdown",
+    n_splits: int = 10,
+    n_repeats: int = 2,
+    **kwargs,
 ):
     def format_for_display(code):
         code = code.replace("```python", "").replace("```", "").replace("<end>", "")
         return code
 
     if display_method == "markdown":
-        from IPython.display import display, Markdown
+        from IPython.display import Markdown, display
 
         display_method = lambda x: display(Markdown(x))
     else:
-
         display_method = print
 
-    assert (
-        iterative == 1 or metric_used is not None
-    ), "metric_used must be set if iterative"
+    assert iterative == 1 or metric_used is not None, (
+        "metric_used must be set if iterative"
+    )
 
+    llm_client = OpenAIClient()
     prompt = build_prompt_from_df(ds, df, iterative=iterative)
 
     if just_print_prompt:
@@ -130,17 +131,13 @@ def generate_features(
     def generate_code(messages):
         if model == "skip":
             return ""
-        client = openai.OpenAI()
-        completion = client.chat.completions.create(
+
+        code = llm_client.generate_completion(
+            messages,
             model=model,
-            messages=messages,
-            stop=["```end"],
-            temperature=0.5,
-            max_completion_tokens=500
+            temperature=kwargs.get("temperature", 0.5),
+            max_tokens=kwargs.get("max_tokens", 1000),
         )
-        completion = response.model_dump()
-        
-        code = completion["choices"][0]["message"]["content"]
         code = code.replace("```python", "").replace("```", "").replace("<end>", "")
         return code
 
@@ -148,14 +145,14 @@ def generate_features(
         old_accs, old_rocs, accs, rocs = [], [], [], []
 
         ss = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=0)
-        for (train_idx, valid_idx) in ss.split(df):
+        for train_idx, valid_idx in ss.split(df):
             df_train, df_valid = df.iloc[train_idx], df.iloc[valid_idx]
 
             # Remove target column from df_train
-            target_train = df_train[ds[4][-1]]
-            target_valid = df_valid[ds[4][-1]]
-            df_train = df_train.drop(columns=[ds[4][-1]])
-            df_valid = df_valid.drop(columns=[ds[4][-1]])
+            target_train = df_train[ds.columns[-1]]
+            target_valid = df_valid[ds.columns[-1]]
+            df_train = df_train.drop(columns=[ds.columns[-1]])
+            df_valid = df_valid.drop(columns=[ds.columns[-1]])
 
             df_train_extended = copy.deepcopy(df_train)
             df_valid_extended = copy.deepcopy(df_valid)
@@ -164,22 +161,22 @@ def generate_features(
                 df_train = run_llm_code(
                     full_code,
                     df_train,
-                    convert_categorical_to_integer=not ds[0].startswith("kaggle"),
+                    convert_categorical_to_integer=not ds.name.startswith("kaggle"),
                 )
                 df_valid = run_llm_code(
                     full_code,
                     df_valid,
-                    convert_categorical_to_integer=not ds[0].startswith("kaggle"),
+                    convert_categorical_to_integer=not ds.name.startswith("kaggle"),
                 )
                 df_train_extended = run_llm_code(
                     full_code + "\n" + code,
                     df_train_extended,
-                    convert_categorical_to_integer=not ds[0].startswith("kaggle"),
+                    convert_categorical_to_integer=not ds.name.startswith("kaggle"),
                 )
                 df_valid_extended = run_llm_code(
                     full_code + "\n" + code,
                     df_valid_extended,
-                    convert_categorical_to_integer=not ds[0].startswith("kaggle"),
+                    convert_categorical_to_integer=not ds.name.startswith("kaggle"),
                 )
 
             except Exception as e:
@@ -188,13 +185,13 @@ def generate_features(
                 return e, None, None, None, None
 
             # Add target column back to df_train
-            df_train[ds[4][-1]] = target_train
-            df_valid[ds[4][-1]] = target_valid
-            df_train_extended[ds[4][-1]] = target_train
-            df_valid_extended[ds[4][-1]] = target_valid
+            df_train[ds.columns[-1]] = target_train
+            df_valid[ds.columns[-1]] = target_valid
+            df_train_extended[ds.columns[-1]] = target_train
+            df_valid_extended[ds.columns[-1]] = target_valid
 
-            from contextlib import contextmanager
-            import sys, os
+            import os
+            import sys
 
             with open(os.devnull, "w") as devnull:
                 old_stdout = sys.stdout
@@ -204,22 +201,22 @@ def generate_features(
                         df_train=df_train,
                         df_test=df_valid,
                         prompt_id="XX",
-                        name=ds[0],
+                        name=ds.name,
                         method=iterative_method,
                         metric_used=metric_used,
                         seed=0,
-                        target_name=ds[4][-1],
+                        target_name=ds.columns[-1],
                     )
 
                     result_extended = evaluate_dataset(
                         df_train=df_train_extended,
                         df_test=df_valid_extended,
                         prompt_id="XX",
-                        name=ds[0],
+                        name=ds.name,
                         method=iterative_method,
                         metric_used=metric_used,
                         seed=0,
-                        target_name=ds[4][-1],
+                        target_name=ds.columns[-1],
                     )
                 finally:
                     sys.stdout = old_stdout
@@ -240,7 +237,7 @@ def generate_features(
             "content": prompt,
         },
     ]
-    display_method(f"*Dataset description:*\n {ds[-1]}")
+    display_method(f"*Dataset description:*\n {ds.description}")
 
     n_iter = iterative
     full_code = ""
@@ -294,7 +291,7 @@ def generate_features(
             + f"Performance after adding features ROC {np.nanmean(rocs):.3f}, ACC {np.nanmean(accs):.3f}.\n"
             + f"Improvement ROC {improvement_roc:.3f}, ACC {improvement_acc:.3f}.\n"
             + f"{add_feature_sentence}\n"
-            + f"\n"
+            + "\n"
         )
 
         if len(code) > 10:
