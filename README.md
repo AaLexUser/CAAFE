@@ -11,14 +11,13 @@ CAAFE systematically verifies the generated features to ensure that only feature
 </p>
 
 ### Usage
-To use CAAFE, first create a `CAAFEClassifier` object specifying your sklearn base classifier (clf_no_feat_eng; e.g. a random forest or [`TabPFN`](https://github.com/automl/TabPFN))
-and the language model you want to use (e.g. gpt-4):
+To use CAAFE, first create a `CAAFEClassifier` object specifying your sklearn base classifier (clf_no_feat_eng; e.g. a random forest or [`TabPFN`](https://github.com/automl/TabPFN)).
+The language model is configured via environment variables or config (see Configuration below):
 
 ```python
 clf_no_feat_eng = ...
 caafe_clf = CAAFEClassifier(
     base_classifier=clf_no_feat_eng,
-    llm_model="gpt-4",
     iterations=2
 )
 ```
@@ -42,13 +41,37 @@ View generated features:
 print(caafe_clf.code)
 ```
 
+### Configuration
+CAAFE uses LiteLLM under the hood. Provide your model and API key via env vars or overrides:
+
+- Required: set `CAAFE_LLM_API_KEY` in your environment (you can copy `.env_example` to `.env`).
+- Optional:
+  - `CAAFE_LLM_MODEL` (default: `openai/gpt-4o`)
+  - `CAAFE_LLM_BASE_URL` (for self-hosted or compatible providers)
+  - `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` to enable telemetry callbacks
+
+You can also control config from code using the classifier arguments:
+
+- `config_overrides`: list like `["llm.model_name='openai/gpt-4o'", "llm.temperature=0.2"]`
+- `presets`: name of a YAML in `caafe/configs/` to merge with defaults
+- `config_path`: path or alias to a YAML (e.g. `"caafe:default"`)
+
+Example with overrides:
+```python
+caafe_clf = CAAFEClassifier(
+    base_classifier=clf_no_feat_eng,
+    iterations=2,
+    config_overrides=["llm.model_name='openai/gpt-4o'", "llm.max_completion_tokens=500"]
+)
+```
+
 #### Why not let GPT generate your features directly (or use Code Interpreter)?
 GPT-4 is a powerful language model that can generate code.
 However, it is not designed to generate code that is useful for machine learning.
 CAAFE uses a systematic verification process to ensure that the generated features are actually useful for the machine learning task at hand by: iteratively creating new code, verifying their performance using cross validation and providing feedback to the language model.
 CAAFE makes sure that cross validation is correctly applied and formalizes the verification process.
 Also, CAAFE uses a whitelist of allowed operations to ensure that the generated code is safe(er) to execute.
-There inherent risks in generating AI generated code, however, please see [Important Usage Considerations][#important-usage-considerations].
+There are inherent risks in generating AI generated code, however, please see [Important Usage Considerations][#important-usage-considerations].
 
 #### Downstream Classifiers
 Downstream classifiers should be fast and need no specific hyperparameter tuning since they are iteratively being called.
@@ -94,10 +117,10 @@ This implies that the generated features may also reflect these biases.
 If the data contains demographic information or other sensitive variables that could potentially be used to discriminate against certain groups,
 we strongly advise against using CAAFE or urge users to proceed with great caution, ensuring rigorous examination of the generated features.
 
-#### Cost of Running CAFE
+#### Cost of Running CAAFE
 CAAFE uses OpenAIs GPT-4 or GPT-3.5 as an endpoint.
 OpenAI charges The cost of running CAAFE depends on the number of iterations, the number of features in the dataset, the length of the dataset description and of the generated code.
-For example, for a dataset with 1000 rows and 10 columns, 10 iterations cost about 0.50\$ for GPT-4 and 0.05\$ for GPT-3.5.
+For example, for a dataset with 1000 rows and 10 columns, 10 iterations cost about 0.50$ for GPT-4 and 0.05$ for GPT-3.5.
 
 ### Paper
 Read our [paper](https://arxiv.org/abs/2305.03403) for more information about the setup (or contact us ☺️)).

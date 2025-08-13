@@ -1,61 +1,158 @@
+from typing import List, Optional
+
+import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 from sklearn.utils.multiclass import unique_labels
-from .run_llm_code import run_llm_code
+
+from .caafe import generate_features
+from .metrics import auc_metric
 from .preprocessing import (
+    make_dataset_numeric,
     make_datasets_numeric,
     split_target_column,
-    make_dataset_numeric,
 )
-from .data import get_X_y
-from .caafe import generate_features
-from .metrics import auc_metric, accuracy_metric
-import pandas as pd
-import numpy as np
-from typing import Optional
-import pandas as pd
-
+from .run_llm_code import run_llm_code
 
 
 class CAAFEClassifier(BaseEstimator, ClassifierMixin):
     """
-    A classifier that uses the CAAFE algorithm to generate features and a base classifier to make predictions.
-
-    Parameters:
-    base_classifier (object, optional): The base classifier to use. If None, a default TabPFNClassifier will be used. Defaults to None.
-    optimization_metric (str, optional): The metric to optimize during feature generation. Can be 'accuracy' or 'auc'. Defaults to 'accuracy'.
-    iterations (int, optional): The number of iterations to run the CAAFE algorithm. Defaults to 10.
-    llm_model (str, optional): The LLM model to use for generating features. Defaults to 'gpt-3.5-turbo'.
-    n_splits (int, optional): The number of cross-validation splits to use during feature generation. Defaults to 10.
-    n_repeats (int, optional): The number of times to repeat the cross-validation during feature generation. Defaults to 2.
+    CAAFEClassifier(base_classifier=None, optimization_metric='accuracy', iterations=10, n_splits=10, n_repeats=2, display_method='markdown', config_overrides=None, config_path=None, presets=None, **kwargs)
+    A scikit-learn compatible classifier that uses the CAAFE algorithm to iteratively synthesize and evaluate features with an LLM, then trains a downstream (base) classifier on the transformed dataset.
+    The workflow is:
+    1) Optionally generate feature-engineering code with an LLM (CAAFE).
+    2) Apply the generated code to transform the training data.
+    3) Numerically encode the transformed data in a stable way for train/inference.
+    4) Fit a base classifier on the engineered features.
+    5) At prediction time, re-apply the exact same transformation and encoding before calling the base classifier.
+    Parameters
+    ----------
+    base_classifier : object, optional
+        A scikit-learn compatible estimator implementing fit, predict, and optionally predict_proba.
+        If None, a TabPFNClassifier is created with a device chosen automatically (CUDA if available).
+    optimization_metric : {'accuracy', 'auc'}, default='accuracy'
+        Metric name intended to guide the feature generation/selection process.
+        Note: The current implementation may use an internal metric configuration during iteration.
+    iterations : int, default=10
+        Number of CAAFE iterations (feature-generation/selection rounds).
+    n_splits : int, default=10
+        Number of cross-validation splits used to evaluate candidate features during generation.
+    n_repeats : int, default=2
+        Number of repeated cross-validation cycles used in evaluation.
+    display_method : str, default='markdown'
+        Display mode for any intermediate outputs/logs produced during feature generation.
+    config_overrides : list of str, optional
+        Provider-/framework-specific override strings passed to the feature generation backend.
+    config_path : str, optional
+        Path to configuration files for the feature generation backend.
+    presets : str, optional
+        Named preset to control the behavior of the feature generation backend.
+    **kwargs
+        Additional provider-specific keyword arguments forwarded to the feature generation routine
+        (for example, model name, temperature, timeouts, etc.).
+    Attributes
+    ----------
+    base_classifier : object
+        The wrapped estimator trained on engineered features.
+    iterations : int
+        Number of CAAFE iterations used.
+    optimization_metric : str
+        Optimization metric name provided at initialization.
+    n_splits : int
+        Cross-validation splits used during feature generation.
+    n_repeats : int
+        Number of repeated CV cycles used during feature generation.
+    display_method : str
+        Display mode used by the feature generation backend.
+    config_overrides : list of str or None
+        Overrides passed to the generation backend.
+    config_path : str or None
+        Path to generation backend configs.
+    presets : str or None
+        Named preset used by the generation backend.
+    kwargs : dict
+        Extra arguments forwarded to the generation backend.
+        Description of the dataset as passed to fit or fit_pandas.
+    feature_names : list of str
+        Original feature names provided at fit time.
+        Name of the target variable.
+    X_ : array-like of shape (n_samples, n_features)
+        Original training features provided to fit.
+    y_ : array-like of shape (n_samples,)
+        Original training targets provided to fit.
+    code : str
+        The generated Python code (if any) that performs feature engineering. Empty when disable_caafe=True.
+    mappings : dict
+        Encoding mappings learned during training that are reused at inference to ensure consistent numeric representations.
+    classes_ : ndarray of shape (n_classes,)
+        Class labels seen during fit (as per scikit-learn convention).
+    Methods
+    -------
+    fit_pandas(df, dataset_description, target_column_name, **kwargs)
+        Convenience method to fit from a pandas DataFrame, inferring feature names and target split.
+    fit(X, y, dataset_description, feature_names, target_name, disable_caafe=False)
+        Fit the classifier. When disable_caafe=True, no LLM-generated features are created and the base classifier
+        is trained on the original features after numeric encoding.
+    predict(X)
+        Predict class labels for X after applying the same feature-generation code (if any) and encodings.
+    predict_proba(X)
+        Predict class probabilities for X (if supported by the base classifier).
+    predict_preprocess(X)
+        Internal helper that applies the stored transformation code and encodings to raw inputs prior to prediction.
+    Notes
+    -----
+    - For large datasets, the default TabPFN backend can be slow. Consider providing a different base_classifier such as RandomForestClassifier.
+    - To avoid column-order mismatches at prediction time, prefer passing a pandas DataFrame with the same column names used during training.
+    - If a target column is accidentally present during prediction, it will be ignored/removed by the preprocessing step.
+    Examples
+    --------
+    Basic usage with a pandas DataFrame:
+    >>> clf = CAAFEClassifier(iterations=5, n_splits=5, n_repeats=1)
+    >>> clf.fit_pandas(df, dataset_description="Binary classification on tabular data", target_column_name="label")
+    >>> y_pred = clf.predict(df.drop(columns=["label"]))
+    >>> y_proba = clf.predict_proba(df.drop(columns=["label"]))
+    Using arrays and explicit feature/target names:
+    >>> X, y = X_train.values, y_train.values
+    >>> feature_names = list(X_train.columns)
+    >>> clf = CAAFEClassifier()
+    >>> clf.fit(X, y, dataset_description="Demo dataset", feature_names=feature_names, target_name="label")
+    >>> y_pred = clf.predict(X_test)
     """
+
     def __init__(
         self,
         base_classifier: Optional[object] = None,
         optimization_metric: str = "accuracy",
         iterations: int = 10,
-        llm_model: str = "gpt-3.5-turbo",
         n_splits: int = 10,
         n_repeats: int = 2,
+        display_method: str = "markdown",
+        config_overrides: Optional[List[str]] = None,
+        config_path: Optional[str] = None,
+        presets: Optional[str] = None,
+        **kwargs,
     ) -> None:
         self.base_classifier = base_classifier
         if self.base_classifier is None:
-            from tabpfn.scripts.transformer_prediction_interface import TabPFNClassifier
-            import torch
             from functools import partial
 
+            import torch
+            from tabpfn import TabPFNClassifier
+
             self.base_classifier = TabPFNClassifier(
-                N_ensemble_configurations=16,
                 device="cuda" if torch.cuda.is_available() else "cpu",
             )
             self.base_classifier.fit = partial(
                 self.base_classifier.fit, overwrite_warning=True
             )
-        self.llm_model = llm_model
         self.iterations = iterations
         self.optimization_metric = optimization_metric
         self.n_splits = n_splits
         self.n_repeats = n_repeats
+        self.display_method = display_method
+        self.config_overrides = config_overrides
+        self.config_path = config_path
+        self.presets = presets
+        self.kwargs = kwargs
 
     def fit_pandas(self, df, dataset_description, target_column_name, **kwargs):
         """
@@ -77,9 +174,7 @@ class CAAFEClassifier(BaseEstimator, ClassifierMixin):
             X, y, dataset_description, feature_columns, target_column_name, **kwargs
         )
 
-    def fit(
-        self, X, y, dataset_description, feature_names, target_name, disable_caafe=False
-    ):
+    def fit(self, X, y, dataset_description, feature_names, target_name):
         """
         Fit the model to the training data.
 
@@ -105,11 +200,17 @@ class CAAFEClassifier(BaseEstimator, ClassifierMixin):
         self.X_ = X
         self.y_ = y
 
-        if X.shape[0] > 3000 and self.base_classifier.__class__.__name__ == "TabPFNClassifier":
+        if (
+            X.shape[0] > 3000
+            and self.base_classifier.__class__.__name__ == "TabPFNClassifier"
+        ):
             print(
                 "WARNING: TabPFN may take a long time to run on large datasets. Consider using alternatives (e.g. RandomForestClassifier)"
             )
-        elif X.shape[0] > 10000 and self.base_classifier.__class__.__name__ == "TabPFNClassifier":
+        elif (
+            X.shape[0] > 10000
+            and self.base_classifier.__class__.__name__ == "TabPFNClassifier"
+        ):
             print("WARNING: CAAFE may take a long time to run on large datasets.")
 
         ds = [
@@ -127,20 +228,21 @@ class CAAFEClassifier(BaseEstimator, ClassifierMixin):
             columns=self.feature_names,
         )
         df_train[target_name] = y
-        if disable_caafe:
-            self.code = ""
-        else:
-            self.code, prompt, messages = generate_features(
-                ds,
-                df_train,
-                model=self.llm_model,
-                iterative=self.iterations,
-                metric_used=auc_metric,
-                iterative_method=self.base_classifier,
-                display_method="markdown",
-                n_splits=self.n_splits,
-                n_repeats=self.n_repeats,
-            )
+
+        self.code, prompt, messages = generate_features(
+            ds,
+            df_train,
+            iterative=self.iterations,
+            metric_used=auc_metric,
+            iterative_method=self.base_classifier,
+            display_method=self.display_method,
+            n_splits=self.n_splits,
+            n_repeats=self.n_repeats,
+            config_overrides=self.config_overrides,
+            config_path=self.config_path,
+            presets=self.presets,
+            **self.kwargs,  # Pass through any additional provider-specific kwarg
+        )
 
         df_train = run_llm_code(
             self.code,
@@ -177,7 +279,7 @@ class CAAFEClassifier(BaseEstimator, ClassifierMixin):
         """
         # check_is_fitted(self)
 
-        if type(X) != pd.DataFrame:
+        if X is not pd.DataFrame:
             X = pd.DataFrame(X, columns=self.X_.columns)
         X, _ = split_target_column(X, self.target_name)
 

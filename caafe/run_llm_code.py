@@ -1,10 +1,19 @@
+import ast
 import copy
+from typing import Optional
+
 import numpy as np
-from .preprocessing import convert_categorical_to_integer_f
-from typing import Any, Dict, Optional
 import pandas as pd
 
-def run_llm_code(code: str, df: pd.DataFrame, convert_categorical_to_integer: Optional[bool] = True, fill_na: Optional[bool] = True) -> pd.DataFrame:
+from .preprocessing import convert_categorical_to_integer_f
+
+
+def run_llm_code(
+    code: str,
+    df: pd.DataFrame,
+    convert_categorical_to_integer: Optional[bool] = True,
+    fill_na: Optional[bool] = True,
+) -> pd.DataFrame:
     """
     Executes the given code on the given dataframe and returns the resulting dataframe.
 
@@ -22,9 +31,8 @@ def run_llm_code(code: str, df: pd.DataFrame, convert_categorical_to_integer: Op
         df = copy.deepcopy(df)
 
         if fill_na and False:
-            df.loc[:, (df.dtypes == object)] = df.loc[:, (df.dtypes == object)].fillna(
-                ""
-            )
+            obj_cols = df.select_dtypes(include=["object"]).columns
+            df.loc[:, obj_cols] = df.loc[:, obj_cols].fillna("")
         if convert_categorical_to_integer and False:
             df = df.apply(convert_categorical_to_integer_f)
 
@@ -39,10 +47,6 @@ def run_llm_code(code: str, df: pd.DataFrame, convert_categorical_to_integer: Op
         raise (e)
 
     return df
-
-
-import ast
-import pandas as pd
 
 
 def check_ast(node: ast.AST) -> None:
@@ -318,11 +322,11 @@ def check_ast(node: ast.AST) -> None:
         "dt",
         "cat",
         "sparse",
-        "plot"
+        "plot",
         # Add other DataFrame methods you want to allow here.
     }
 
-    if type(node) not in allowed_nodes:
+    if not isinstance(node, tuple(allowed_nodes)) and type(node) not in allowed_nodes:
         raise ValueError(f"Disallowed code: {ast.unparse(node)} is {type(node)}")
 
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -332,7 +336,7 @@ def check_ast(node: ast.AST) -> None:
     if isinstance(node, ast.Attribute) and node.attr not in allowed_attrs:
         raise ValueError(f"Disallowed attribute: {node.attr}")
 
-    if isinstance(node, ast.Import) or isinstance(node, ast.ImportFrom):
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
         for alias in node.names:
             if alias.name not in allowed_packages:
                 raise ValueError(f"Disallowed package import: {alias.name}")

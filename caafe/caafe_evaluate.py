@@ -1,10 +1,13 @@
 import copy
+
 import pandas as pd
-import tabpfn
-import numpy as np
-from .data import get_X_y
-from .preprocessing import make_datasets_numeric, make_dataset_numeric
 from sklearn.base import BaseEstimator
+
+from caafe.metrics import accuracy_metric as tabpfn_accuracy_metric
+from caafe.metrics import auc_metric as tabpfn_auc_metric
+
+from .data import get_X_y
+from .preprocessing import make_dataset_numeric, make_datasets_numeric
 
 
 def evaluate_dataset(
@@ -18,6 +21,10 @@ def evaluate_dataset(
     max_time=300,
     seed=0,
 ):
+    """
+    Minimal evaluator used during iterative feature generation. Supports only
+    scikit-learn compatible estimators (method: BaseEstimator).
+    """
     df_train, df_test = copy.deepcopy(df_train), copy.deepcopy(df_test)
     df_train, _, mappings = make_datasets_numeric(
         df_train, None, target_name, return_mappings=True
@@ -28,74 +35,20 @@ def evaluate_dataset(
         test_x, test_y = get_X_y(df_test, target_name=target_name)
 
     x, y = get_X_y(df_train, target_name=target_name)
-    feature_names = list(df_train.drop(target_name, axis=1).columns)
 
-    np.random.seed(0)
-    if method == "autogluon" or method == "autosklearn2":
-        if method == "autogluon":
-            from tabpfn.scripts.tabular_baselines import autogluon_metric
-
-            clf = autogluon_metric
-        elif method == "autosklearn2":
-            from tabpfn.scripts.tabular_baselines import autosklearn2_metric
-
-            clf = autosklearn2_metric
-        metric, ys, res = clf(
-            x, y, test_x, test_y, feature_names, metric_used, max_time=max_time
-        )  #
-    elif type(method) == str:
-        if method == "gp":
-            from tabpfn.scripts.tabular_baselines import gp_metric
-
-            clf = gp_metric
-        elif method == "knn":
-            from tabpfn.scripts.tabular_baselines import knn_metric
-
-            clf = knn_metric
-        elif method == "xgb":
-            from tabpfn.scripts.tabular_baselines import xgb_metric
-
-            clf = xgb_metric
-        elif method == "catboost":
-            from tabpfn.scripts.tabular_baselines import catboost_metric
-
-            clf = catboost_metric
-        elif method == "random_forest":
-            from tabpfn.scripts.tabular_baselines import random_forest_metric
-
-            clf = random_forest_metric
-        elif method == "logistic":
-            from tabpfn.scripts.tabular_baselines import logistic_metric
-
-            clf = logistic_metric
-        metric, ys, res = clf(
-            x,
-            y,
-            test_x,
-            test_y,
-            [],
-            metric_used,
-            max_time=max_time,
-            no_tune={},
-        )
-    # If sklearn classifier
-    elif isinstance(method, BaseEstimator):
-        method.fit(X=x, y=y.long())
-        ys = method.predict_proba(test_x)
+    # Fit and predict using provided estimator
+    if isinstance(method, BaseEstimator):
+        method.fit(X=x.numpy(), y=y.numpy().astype(int))
+        ys = method.predict_proba(test_x.numpy())
     else:
-        metric, ys, res = method(
-            x,
-            y,
-            test_x,
-            test_y,
-            [],
-            metric_used,
+        raise ValueError(
+            "Only scikit-learn compatible estimators are supported in this simplified evaluator."
         )
 
-    acc = tabpfn.scripts.tabular_metrics.accuracy_metric(test_y, ys)
-    roc = tabpfn.scripts.tabular_metrics.auc_metric(test_y, ys)
+    acc = tabpfn_accuracy_metric(test_y, ys)
+    roc = tabpfn_auc_metric(test_y, ys)
 
-    method_str = method if type(method) == str else "transformer"
+    method_str = method if isinstance(method, str) else "transformer"
     return {
         "acc": float(acc.numpy()),
         "roc": float(roc.numpy()),
@@ -107,40 +60,3 @@ def evaluate_dataset(
         "max_time": max_time,
         "feats": x.shape[-1],
     }
-
-
-def get_leave_one_out_importance(
-    df_train, df_test, ds, method, metric_used, max_time=30
-):
-    """Get the importance of each feature for a dataset by dropping it in the training and prediction."""
-    res_base = evaluate_dataset(
-        ds,
-        df_train,
-        df_test,
-        prompt_id="",
-        name=ds[0],
-        method=method,
-        metric_used=metric_used,
-        max_time=max_time,
-    )
-
-    importances = {}
-    for feat_idx, feat in enumerate(set(df_train.columns)):
-        if feat == ds[4][-1]:
-            continue
-        df_train_ = df_train.copy().drop(feat, axis=1)
-        df_test_ = df_test.copy().drop(feat, axis=1)
-        ds_ = copy.deepcopy(ds)
-
-        res = evaluate_dataset(
-            ds_,
-            df_train_,
-            df_test_,
-            prompt_id="",
-            name=ds[0],
-            method=method,
-            metric_used=metric_used,
-            max_time=max_time,
-        )
-        importances[feat] = (round(res_base["roc"] - res["roc"], 3),)
-    return importances

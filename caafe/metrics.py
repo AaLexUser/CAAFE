@@ -1,14 +1,9 @@
-from sklearn.metrics import (
-    roc_auc_score,
-    accuracy_score,
-    balanced_accuracy_score,
-    average_precision_score,
-    mean_squared_error,
-    mean_absolute_error,
-    r2_score,
-)
-import torch
 import numpy as np
+import torch
+from sklearn.metrics import (
+    accuracy_score,
+    roc_auc_score,
+)
 
 
 def auc_metric(target, pred, multi_class="ovo", numpy=False):

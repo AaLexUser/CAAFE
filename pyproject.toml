@@ -1,0 +1,22 @@
+[project]
+name = "caafe"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langfuse==2.59.7",
+    "lightgbm>=4.6.0",
+    "litellm[caching]>=1.75.5.post1",
+    "omegaconf>=2.3.0",
+    "python-dotenv>=1.1.1",
+    "tabpfn",
+]
+
+[tool.uv.sources]
+tabpfn = { git = "https://github.com/PriorLabs/TabPFN.git" }
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.30.1",
+]

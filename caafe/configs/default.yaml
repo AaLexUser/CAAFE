@@ -1,0 +1,17 @@
+llm:
+  model_name: ${oc.env:CAAFE_LLM_MODEL, openai/gpt-4o}
+  base_url: ${oc.env:CAAFE_LLM_BASE_URL, null}
+  api_key: ${oc.env:CAAFE_LLM_API_KEY, null}
+  max_completion_tokens: 500
+  temperature: 0.5
+  stop_sequences:
+    - "```"
+  caching:
+    enabled: true
+    dir_path: .caafe_cache
+  extra_headers:
+    X-Title: CAAFE
+langfuse:
+  host: ${oc.env:LANGFUSE_HOST, https://cloud.langfuse.com}
+  public_key: ${oc.env:LANGFUSE_PUBLIC_KEY, null}
+  secret_key: ${oc.env:LANGFUSE_SECRET_KEY, null}
