@@ -13,6 +13,22 @@ dependencies = [
     "tabpfn",
 ]
 
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+# Hatchling build configuration
+[tool.hatch.build.targets.wheel]
+packages = ["caafe"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "caafe/**/*",
+  "README.md",
+  "LICENSE.txt",
+  "pyproject.toml",
+]
+
 [tool.uv.sources]
 tabpfn = { git = "https://github.com/PriorLabs/TabPFN.git" }
 
